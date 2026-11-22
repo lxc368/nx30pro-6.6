@@ -64,6 +64,8 @@ PassWall、ZeroTier、TurboACC（`turboacc-mtk`）、EQOS（`eqos-mtk`）、WOL�
 
 `diy-part1.sh` 末尾还留了 helloworld / mosdns(v5) / lucky / openlist2 四条注释，需要时取消注释即可。
 
+除了 feed 层面，`diy-part2.sh` 还会**就地给 `zerotier` 升版**：`1.14.1` → `1.16.2`。immortalwrt 和 openwrt 官方的 `openwrt-24.10` 分支都还停在 1.14.1，只有 25.12 / master 跟到了 1.16.2；两边配方只差版本号、hash、许可证字段和 `ZT_NONFREE` 开关，所以直接改 Makefile 更省事。
+
 ## 自动化
 
 | 工作流 | 说明 |
