@@ -1,0 +1,33 @@
+#!/bin/sh
+#
+# 首次启动执行的 uci-defaults 脚本（/etc/uci-defaults/ 下的脚本执行一次后会自动删除）。
+# 本文件当前是空模板：取消注释即可预置配置，随源码一起编译进固件，省去刷完手动设置。
+#
+# 注意：启用后需要给本文件加可执行权限（git update-index --chmod=+x files/etc/uci-defaults/99-custom），
+# 否则 OpenWrt 不会执行它。
+#
+# --- 示例 1：设置 root 密码（推荐，比默认空密码安全）
+# 先生成：openssl passwd -1 '你的密码'  或  mkpasswd -m sha512crypt
+# echo 'root:$1$xxxx$yyyyyyyyyyyy' | chpasswd -e
+#
+# --- 示例 2：改 LAN 地址（默认 192.168.6.1）
+# uci set network.lan.ipaddr='192.168.6.1'
+# uci commit network
+#
+# --- 示例 3：预置 WiFi
+# uci set wireless.radio0.disabled='0'
+# uci set wireless.default_radio0.ssid='MyWiFi'
+# uci set wireless.default_radio0.key='MyPassword123'
+# uci set wireless.default_radio0.encryption='psk2+ccmp'
+# uci commit wireless
+#
+# --- 示例 4：设置时区
+# uci set system.@system[0].timezone='CST-8'
+# uci set system.@system[0].zonename='Asia/Shanghai'
+# uci commit system
+#
+# --- 示例 5：关掉 IPv6
+# uci set network.wan6.disabled='1'
+# uci commit network
+
+exit 0

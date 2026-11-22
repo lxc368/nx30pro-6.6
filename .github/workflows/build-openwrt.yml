@@ -19,6 +19,15 @@ on:
         required: false
         default: 'false'
 
+# 上传 Release 资产需要写权限（新仓库默认 GITHUB_TOKEN 是只读的）
+permissions:
+  contents: write
+
+# 手动连点两次时取消前一次，避免并行跑两份构建
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-6.6
   REPO_BRANCH: openwrt-24.10-6.6
@@ -28,10 +37,15 @@ env:
   DIY_P2_SH: diy-part2.sh
   UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
-  UPLOAD_COWTRANSFER: false
-  UPLOAD_WETRANSFER: false
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
+  # 编译依赖：原先从 git.io/depends-ubuntu-2004 拉取，该短链已 404，
+  # 且 curl 失败会让 apt-get 无参静默跳过安装。这里改为内联，勿再依赖外部链接。
+  DEPS: >-
+    build-essential clang flex bison g++ gawk gcc-multilib g++-multilib
+    gettext git libncurses-dev libssl-dev libelf-dev libfuse-dev
+    python3-setuptools python3-pyelftools rsync swig unzip zlib1g-dev
+    file wget
 
 jobs:
   build:
@@ -39,7 +53,7 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@main
+      uses: actions/checkout@v7
 
     - name: Initialization environment
       env:
@@ -47,7 +61,7 @@ jobs:
       run: |
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
         sudo -E apt-get -qq update
-        sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2004)
+        sudo -E apt-get -qq install -y $DEPS
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
         sudo timedatectl set-timezone "$TZ"
@@ -60,6 +74,16 @@ jobs:
         df -hT $PWD
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+        mkdir -p /workdir/openwrt/dl
+
+    # 缓存已下载的源码包，避免每次全量重下 3~5GB（上游包 404 也更不容易整轮失败）
+    - name: Restore download cache
+      uses: actions/cache@v6
+      with:
+        path: /workdir/openwrt/dl
+        key: openwrt-dl-${{ github.run_id }}
+        restore-keys: |
+          openwrt-dl-
 
     - name: Load custom feeds
       run: |
@@ -98,27 +122,46 @@ jobs:
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
+    # 编译日志落盘 build.log，失败时自动上传，避免只剩一句 exit code
     - name: Compile the firmware
       id: compile
       run: |
+        set -o pipefail
         cd openwrt
         echo -e "$(nproc) thread compile"
-        make -j$(nproc) || make -j1 || make -j1 V=s
-        echo "status=success" >> $GITHUB_OUTPUT
+        if make -j$(nproc) 2>&1 | tee build.log; then
+          echo "status=success" >> $GITHUB_OUTPUT
+        elif make -j1 V=s 2>&1 | tee -a build.log; then
+          echo "parallel build failed, retried with -j1 V=s" >> build.log
+          echo "status=success" >> $GITHUB_OUTPUT
+        else
+          echo "status=failure" >> $GITHUB_OUTPUT
+          exit 1
+        fi
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+    - name: Upload build log on failure
+      if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        name: build-log${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: openwrt/build.log
+        retention-days: 7
+        if-no-files-found: warn
 
     - name: Check space usage
       if: (!cancelled())
       run: df -hT
 
     - name: Upload bin directory
-      uses: actions/upload-artifact@main
+      uses: actions/upload-artifact@v7
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       with:
         name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: openwrt/bin
+        retention-days: 7
 
     # 整理编译好的固件
     - name: Organize files
@@ -130,52 +173,42 @@ jobs:
         rm -rf *.buildinfo
         rm -rf *.manifest
         rm -rf *.json
-        rm -rf *bl2.bin
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware directory
-      uses: actions/upload-artifact@main
+      uses: actions/upload-artifact@v7
       if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
-
-    - name: Upload firmware to cowtransfer
-      id: cowtransfer
-      if: steps.organize.outputs.status == 'success' && env.UPLOAD_COWTRANSFER == 'true' && !cancelled()
-      run: |
-        curl -fsSL git.io/file-transfer | sh
-        ./transfer cow --block 2621440 -s -p 64 --no-progress ${FIRMWARE} 2>&1 | tee cowtransfer.log
-        echo "::warning file=cowtransfer.com::$(cat cowtransfer.log | grep https)"
-        echo "url=$(cat cowtransfer.log | grep https | cut -f3 -d" ")" >> $GITHUB_OUTPUT
-
-    - name: Upload firmware to WeTransfer
-      id: wetransfer
-      if: steps.organize.outputs.status == 'success' && env.UPLOAD_WETRANSFER == 'true' && !cancelled()
-      run: |
-        curl -fsSL git.io/file-transfer | sh
-        ./transfer wet -s -p 16 --no-progress ${FIRMWARE} 2>&1 | tee wetransfer.log
-        echo "::warning file=wetransfer.com::$(cat wetransfer.log | grep https)"
-        echo "url=$(cat wetransfer.log | grep https | cut -f3 -d" ")" >> $GITHUB_OUTPUT
+        retention-days: 7
 
     - name: Generate release tag
       id: tag
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
-        echo "release_tag=$(date +"%Y.%m.%d-%H%M-immortalwrt24.10-6.6-cmcc_rax3000m-237")" >> $GITHUB_OUTPUT
+        echo "release_tag=$(date +"%Y.%m.%d-%H%M")-immortalwrt24.10-6.6-nx30pro" >> $GITHUB_OUTPUT
         touch release.txt
-        echo "H3C-NX30-PRO闭源固件" >> release.txt
-        echo "后台：192.168.6.1" >> release.txt
-        echo "账号：root" >> release.txt
-        echo "密码：无" >> release.txt
+        echo "H3C Magic NX30 Pro 闭源驱动固件（immortalwrt-mt798x-6.6）" >> release.txt
+        echo "" >> release.txt
+        echo "机型：H3C Magic NX30 Pro（MT7981B / 128MB NAND，nmbm 布局）" >> release.txt
+        echo "后台：http://192.168.6.1" >> release.txt
+        echo "账号：root　密码：无（首次登录后请立即设置密码）" >> release.txt
         echo "默认主题：Bootstrap" >> release.txt
-        echo "集成插件：homeproxy acme ddns zerotier frps frpc natmap udpxy uhttpd rustdesk-server irqbalance" >> release.txt
+        echo "集成插件：PassWall、ZeroTier、TurboACC、EQOS、WOL、wrtbwmon、ramfree、ttyd、mtwifi-cfg" >> release.txt
+        echo "" >> release.txt
+        echo "刷机文件：" >> release.txt
+        echo "- 已有 OpenWrt：用 *-squashfs-sysupgrade.bin 在「系统-备份/升级」里刷" >> release.txt
+        echo "- 首次刷机 / 救砖：进 U-Boot 网页恢复，上传 *-squashfs-factory.bin" >> release.txt
+        echo "- *-initramfs-kernel.bin 为临时启动镜像（不改写 flash）" >> release.txt
+        echo "" >> release.txt
         echo "编译源码：https://github.com/padavanonly/immortalwrt-mt798x-6.6" >> release.txt
+        echo "配置与说明：https://github.com/lxc368/nx30pro-6.6" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware to release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v3
       if: steps.tag.outputs.status == 'success' && !cancelled()
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -185,7 +218,7 @@ jobs:
         files: ${{ env.FIRMWARE }}/*
 
     - name: Delete workflow runs
-      uses: GitRML/delete-workflow-runs@main
+      uses: Mattraks/delete-workflow-runs@v2.1.0
       with:
         retain_days: 1
         keep_minimum_runs: 3
