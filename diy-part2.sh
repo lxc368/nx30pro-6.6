@@ -17,41 +17,14 @@ set -e
 
 # ---------------------------------------------------------------------------
 # 1) golang 语言包
-#    xray-core 26.11.9 的 go.mod 要求 go1.27，sing-box 1.14.4 要求 go1.25.5，
-#    源码树自带 / 原先用的 24.x 都编不过，改用 sbwml 的 27.x
+#    当前 .config 里没有依赖 golang 的包（xray/sing-box 等代理核心不装），这一步
+#    不会被触发编译，保留只是为了以后加插件时不去抓源码树里那份过老的 go。
 # ---------------------------------------------------------------------------
 rm -rf feeds/packages/lang/golang
-git clone --depth 1 https://github.com/sbwml/packages_lang_golang -b 27.x feeds/packages/lang/golang
+git clone --depth 1 https://github.com/sbwml/packages_lang_golang -b 24.x feeds/packages/lang/golang
 
 # ---------------------------------------------------------------------------
-# 2) 用 passwall 上游的最新版覆盖 immortalwrt 里的旧快照
-#    （旧版 luci-app-passwall 25.12.16 / xray-core 25.2.21）
-#    feeds install -a 已经把旧版链进 package/feeds/，这里先撤掉再强制装新版
-# ---------------------------------------------------------------------------
-rm -rf package/feeds/luci/luci-app-passwall
-./scripts/feeds install -f -p passwall_luci luci-app-passwall
-
-# 代理核心包：与 immortalwrt/packages 重名的那些，统一换成上游版本
-# （smartdns 故意不覆盖，它和 luci-app-smartdns 版本绑定，保持 immortalwrt 的）
-CORE_PKGS="xray-core sing-box shadowsocks-rust hysteria naiveproxy shadow-tls \
-v2ray-geodata geoview chinadns-ng dns2socks microsocks tcping v2ray-plugin \
-xray-plugin simple-obfs"
-
-for p in $CORE_PKGS; do
-	rm -rf "package/feeds/packages/$p"
-done
-./scripts/feeds install -f -p passwall_packages $CORE_PKGS
-
-# ---------------------------------------------------------------------------
-# 3) 打开 PassWall 主开关
-#    .config 里只留了 luci-app-passwall_INCLUDE_* 这些子选项，主包从来没启用，
-#    所以之前发布的固件里其实没有 PassWall。这里补上（make defconfig 会补齐依赖）
-# ---------------------------------------------------------------------------
-grep -q '^CONFIG_PACKAGE_luci-app-passwall=y' .config || \
-	echo 'CONFIG_PACKAGE_luci-app-passwall=y' >> .config
-
-# ---------------------------------------------------------------------------
-# 4) ZeroTier：immortalwrt/packages 的 24.10 分支停在 1.14.1（2024 年的版本），
+# 2) ZeroTier：immortalwrt/packages 的 24.10 分支停在 1.14.1（2024 年的版本），
 #    25.12 / master 分支早就是 1.16.2 了。两边的配方只差版本号、hash、
 #    许可证字段和一个 1.16 新增的 ZT_NONFREE 开关，patches/ 完全相同
 #    （已实测 6 个 patch 全部能干净应用到 1.16.2 源码），所以就地改而不是换 feed。

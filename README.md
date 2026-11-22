@@ -40,11 +40,11 @@
 
 ## 集成的插件
 
-PassWall、ZeroTier、TurboACC（`turboacc-mtk`）、EQOS（`eqos-mtk`）、WOL、wrtbwmon、ramfree、ttyd、`mtwifi-cfg`、`package-manager`，主题为 Bootstrap。
+ZeroTier、TurboACC（`turboacc-mtk`）、EQOS（`eqos-mtk`）、WOL、wrtbwmon、ramfree、ttyd、`mtwifi-cfg`、`package-manager`，主题为 Bootstrap。
+
+PassWall 已经评估过并放弃：256MB 内存 + MT7981 跑 xray/sing-box 不划算，装了也是摆设。`.config` 里残留的几条 `CONFIG_PACKAGE_luci-app-passwall_INCLUDE_*` 属于孤儿选项（主包从不启用），没有任何实际影响。
 
 需要增删软件包：改 `.config`（在源码目录 `make menuconfig` 后拷回来）再推送，或直接手动触发一次构建。
-
-> PassWall 的主开关 `CONFIG_PACKAGE_luci-app-passwall` 之前从未在 `.config` 里启用（只配了 `INCLUDE_*` 子选项），所以 2026.10 及更早的固件里**没有** PassWall；现在由 `diy-part2.sh` 补上。
 
 ## 软件源
 
@@ -53,14 +53,12 @@ PassWall、ZeroTier、TurboACC（`turboacc-mtk`）、EQOS（`eqos-mtk`）、WOL�
 | `packages` | `immortalwrt/packages` `openwrt-24.10` | 与源码分支严格对应 |
 | `luci` | `immortalwrt/luci` `openwrt-24.10` | 同上，版本形如 `26.246.…` |
 | `routing` / `telephony` | `openwrt/routing`、`openwrt/telephony` `openwrt-24.10` | 同上 |
-| `passwall_luci` | `Openwrt-Passwall/openwrt-passwall` `main` | 覆盖 immortalwrt 的 25.12.16 快照 |
-| `passwall_packages` | `Openwrt-Passwall/openwrt-passwall-packages` `main` | xray-core / sing-box 等核心，取最新 |
-| `golang`（替换） | `sbwml/packages_lang_golang` `27.x` | xray-core 26.11 要求 go1.27 |
+| `golang`（替换） | `sbwml/packages_lang_golang` `24.x` | 当前没有 go 包要用，仅作备用 |
 
 两点原则：
 
 - **不要跨分支**。immortalwrt 已经有 `openwrt-25.12` 和 `master`，但 luci/packages 与 24.10 的内核、ucode、js 接口不匹配，混用会直接编译失败。要换新分支就得连源码一起换。
-- **同名包只能有一个**。第三方 feed 里与默认 feed 重名的包，`feeds install -a` 会同时链进来，所以 `diy-part2.sh` 里显式删掉旧链接再 `feeds install -f -p <feed> <pkg>` 强制用新版。
+- **同名包只能有一个**。将来想用第三方 feed 覆盖某个包时，先 `rm -rf package/feeds/packages/<pkg>` 再 `./scripts/feeds install -f -p <新feed> <pkg>` —— `feeds install -a` 会跳过同名包（先装的赢），不显式指定是不会生效的。
 
 `diy-part1.sh` 末尾还留了 helloworld / mosdns(v5) / lucky / openlist2 四条注释，需要时取消注释即可。
 
@@ -98,8 +96,8 @@ files/etc/uci-defaults/99-custom     # 预置配置模板（默认全注释，�
 - `.config` 里的 `CONFIG_TARGET_ROOTFS_PARTSIZE=160` 是从父仓库（RAX3000M）带过来的遗留值，对 64 MB UBI 的 NX30 Pro 没有实际作用，未改动以免影响现有的可编译状态。
 - Release 里只保留固件和 `sha256sums`；`packages/`、`*.manifest`、`*.buildinfo` 在打包前已删除。
 - 编译日志只在失败时上传（artifact 名 `build-log_*`，保留 7 天），构建成功不保留。
-- 加入 PassWall 后 rootfs 会从约 15 MB 涨到 25–35 MB（xray + sing-box + shadowsocks-rust 都不小），UBI 分区 64 MB 仍然够用；如果不需要 sing-box，把 `.config` 里的 `CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox` 关掉能省最多。
-- `xray-core` / `sing-box` 由 go1.27 交叉编译，单是这两个包会多花 20–40 分钟。
+- 没有启用 PassWall / xray / sing-box：这台 256MB 内存 + MT7981 扛不住，属于主动放弃而不是漏配。
+- `.config` 里那几条 `CONFIG_PACKAGE_luci-app-passwall_INCLUDE_*` 是孤儿选项（主包不启用），留着无害，也可以顺手删掉。
 
 ## 致谢
 
