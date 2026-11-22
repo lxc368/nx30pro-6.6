@@ -54,6 +54,7 @@ PassWall 已经评估过并放弃：256MB 内存 + MT7981 跑 xray/sing-box 不�
 | `luci` | `immortalwrt/luci` `openwrt-24.10` | 同上，版本形如 `26.246.…` |
 | `routing` / `telephony` | `openwrt/routing`、`openwrt/telephony` `openwrt-24.10` | 同上 |
 | `golang`（替换） | `sbwml/packages_lang_golang` `24.x` | 当前没有 go 包要用，仅作备用 |
+| `easytier` | `EasyTier/luci-app-easytier` `main` | **只挂源、不启用**，不参与编译（见下） |
 
 两点原则：
 
@@ -63,6 +64,68 @@ PassWall 已经评估过并放弃：256MB 内存 + MT7981 跑 xray/sing-box 不�
 `diy-part1.sh` 末尾还留了 helloworld / mosdns(v5) / lucky / openlist2 四条注释，需要时取消注释即可。
 
 除了 feed 层面，`diy-part2.sh` 还会**就地给 `zerotier` 升版**：`1.14.1` → `1.16.2`。immortalwrt 和 openwrt 官方的 `openwrt-24.10` 分支都还停在 1.14.1，只有 25.12 / master 跟到了 1.16.2；两边配方只差版本号、hash、许可证字段和 `ZT_NONFREE` 开关，所以直接改 Makefile 更省事。
+
+### EasyTier（挂了源，但没启用）
+
+EasyTier 是去中心化的组网方案，和 ZeroTier 定位相近，但走 P2P 打洞、可以走公网中继，跨运营商不容易被限速。feed 已经加进 `diy-part1.sh`（`EasyTier/luci-app-easytier`，main），**但 `.config` 里没有启用，所以目前的固件里不会有它，也不占用编译时间**。
+
+以后想用的时候，在 `.config` 里加两行：
+
+```
+CONFIG_PACKAGE_luci-app-easytier=y   # LuCI 界面，依赖 kmod-tun + luci-compat（两个都已经在配置里）
+CONFIG_PACKAGE_easytier=y            # 核心二进制，v2.7.0
+```
+
+两个好处：它**不需要 Rust 工具链**（`Build/Prepare` 直接下上游预编译的 `easytier-linux-aarch64-v*.zip`，`Build/Compile` 是空的），aarch64 在支持列表里；所以真开了也只是多几 MB 加几十秒下载，不像 xray 那样要现编。另外 `luci-app-easytier` 本身不依赖 `easytier` 核心包，它支持运行时在线下载二进制，只想先看界面也可以只开界面那一个。
+
+## 启用的软件包
+
+`.config` 经 `make defconfig` 展开后有 **435 个 `=y`**：其中 158 个内核模块、10 个 LuCI 应用、11 个中文语言包。上一次构建（2026.10.07）实际装进固件的是 397 个包。
+
+### LuCI 应用
+
+| 应用 | 作用 |
+|---|---|
+| `luci-app-mtwifi-cfg` | MT7981 闭源 WiFi 配置（信道 / 功率 / 漫游） |
+| `luci-app-turboacc-mtk` | 硬件 + 软件 NAT 加速，带 BBR |
+| `luci-app-eqos-mtk` | 按 IP / MAC 限速 |
+| `luci-app-wrtbwmon` | 每设备流量统计 |
+| `luci-app-zerotier` | ZeroTier 组网 |
+| `luci-app-wol` | 网络唤醒（配 `etherwake`） |
+| `luci-app-ttyd` | 网页终端 |
+| `luci-app-ramfree` | 一键释放内存 |
+| `luci-app-package-manager` | 图形化软件包管理 |
+| `luci-app-firewall` | 防火墙 |
+
+### 界面与语言
+
+- `luci-base`、`luci-mod-admin-full`、`luci-mod-network`、`luci-mod-status`、`luci-mod-system`、`luci-light`
+- `luci-compat` + `luci-lua-runtime`（老式 Lua 插件需要；`luci-app-easytier` 也是走这层）
+- 主题只有 `luci-theme-bootstrap`
+- 中文：`luci-i18n-{base,firewall,mtwifi-cfg,turboacc-mtk,eqos-mtk,wrtbwmon,zerotier,wol,ttyd,ramfree,package-manager}-zh-cn`
+- `default-settings` + `default-settings-chn`（默认中文界面、中国时区）
+
+### 网络底座
+
+`dnsmasq-full`（DHCP/DNS，带 dnssec / ipset / nftset）、`odhcpd-ipv6only`、`firewall4` + `nftables-json`、`dropbear` + `openssh-sftp-server`、`uhttpd`、`ppp` + `ppp-mod-pppoe`、`wpad-openssl`、`iw` / `iwinfo` / `wireless-tools` / `wireless-regdb`、`ethtool`、`ip-tiny`、`iptables-nft` + 一批 `iptables-mod-*`、`ipset`、`tc-tiny`、`tcpdump`、`uboot-envtools`
+
+### 存储 / USB
+
+`block-mount` + `automount` + `blockd`、`e2fsprogs`、`fdisk`、`ntfs3-mount`、`usbutils` / `usbids`
+内核侧：`kmod-fs-btrfs` / `ext4` / `exfat` / `ntfs3` / `vfat`、`kmod-usb-storage` / `-extras` / `-uas`、`kmod-usb-xhci-mtk` / `ehci` / `usb3`
+
+### 内核模块里比较关键的
+
+`kmod-tun`（ZeroTier / EasyTier 都要）、`kmod-wireguard`、`kmod-tcp-bbr`、`kmod-ipt-offload`、`kmod-nft-offload`、`kmod-ipt-fullconenat`、`kmod-ipt-ipset`、`kmod-ipt-tproxy` / `kmod-nft-tproxy`、`kmod-zram`、`kmod-bonding`、`kmod-macvlan` / `kmod-veth`
+
+### 其它
+
+`zram-swap`、`htop`、`nano`、`openssl-util`、`ca-bundle`、MTK 私有工具（`mtwifi-cfg`、`mtkhqos_util`、`switch`、`mii_mgr`、`mtk-smp`、`regs`、`autocore-arm`）
+
+### 两个小注
+
+- `.config` 里那 3 条 `luci-app-passwall_INCLUDE_*` 是孤儿选项（主包从不启用），等效于不存在。
+- `knot-resolver_dnstap` 是被 `dnsmasq-full` 的依赖链带进来的，不是主动选的。
 
 ## 自动化
 
